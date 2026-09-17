@@ -36,29 +36,30 @@ st.markdown("---")
 
 @st.cache_data
 def carregar_dados():
-    # 1. Carregar planilha
+    # 1. Carregar planilha ignorando erros de tipo
     df_raw = pd.read_excel('EstoqueReal.xls', header=None)
     
-    # Encontrar a linha do cabeçalho que contém 'Cód.'
-    idx_header = 0
-    for idx, row in df_raw.iterrows():
-        row_str = row.astype(str).values
-        if any('Cód' in item for item in row_str):
+    # Identificar a linha do cabeçalho que contém a palavra 'Cód'
+    idx_header = 6 # Padrão do relatório WGlass
+    for idx in range(min(15, len(df_raw))):
+        linha_texto = " ".join([str(v) for v in df_raw.iloc[idx].values if pd.notna(v)])
+        if 'Cód' in linha_texto:
             idx_header = idx
             break
 
+    # Definir cabeçalho e dados
     df_est = df_raw.iloc[idx_header + 1:].copy()
-    df_est.columns = df_raw.iloc[idx_header].values
+    df_est.columns = [str(c).strip() for c in df_raw.iloc[idx_header].values]
 
-    # Remover colunas com nomes Nulos/NaN e linhas inválidas
-    df_est = df_est.loc[:, df_est.columns.notna()]
-    df_est.columns = [str(col).strip() for col in df_est.columns]
+    # Limpar colunas nulas
+    df_est = df_est.loc[:, ~df_est.columns.str.contains('nan|None', case=False, na=False)]
 
+    # Identificar coluna de Código
     col_cod = [c for c in df_est.columns if 'Cód' in c]
     if col_cod:
         c_cod = col_cod[0]
         df_est = df_est[df_est[c_cod].notna()]
-        df_est = df_est[~df_est[c_cod].astype(str).isin(['Cód.', 'Cód', 'TOTAL', 'Totais'])].copy()
+        df_est = df_est[~df_est[c_cod].astype(str).str.upper().isin(['CÓD.', 'CÓD', 'TOTAL', 'TOTAIS'])].copy()
 
     def extrair_num(val):
         if pd.isna(val): return 0.0
@@ -82,26 +83,22 @@ def carregar_dados():
         try: return float(s)
         except: return 0.0
 
-    # Busca dinâmica pelas colunas principais
-    def buscar_coluna(padrao_nome, padrao_fallback):
+    # Busca segura pelas colunas principais
+    def buscar_coluna(padrao):
         for col in df_est.columns:
-            if padrao_nome.lower() in col.lower():
-                return col
-        for col in df_est.columns:
-            if padrao_fallback.lower() in col.lower():
+            if padrao.lower() in str(col).lower():
                 return col
         return None
 
-    col_disp = buscar_coluna('Disponível', 'Disp')
-    col_custo_unit = buscar_coluna('Preço Custo', 'Custo')
-    col_custo_tot = buscar_coluna('Preço Total de Custo', 'Total')
-    col_prod = buscar_coluna('Produto', 'Descrição')
+    col_disp = buscar_coluna('Disponível') or buscar_coluna('Disp')
+    col_custo_unit = buscar_coluna('Preço Custo') or buscar_coluna('Custo')
+    col_custo_tot = buscar_coluna('Preço Total de Custo') or buscar_coluna('Total')
+    col_prod = buscar_coluna('Produto') or buscar_coluna('Descrição')
 
-    # Renomear/Garantir mapeamento correto
     df_est['Qtd_Disponivel'] = df_est[col_disp].apply(extrair_num) if col_disp else 0.0
     df_est['Preco_Custo_Unit'] = df_est[col_custo_unit].apply(converter_moeda) if col_custo_unit else 0.0
     df_est['Valor_Custo_Total'] = df_est[col_custo_tot].apply(converter_moeda) if col_custo_tot else (df_est['Qtd_Disponivel'] * df_est['Preco_Custo_Unit'])
-    df_est['Produto'] = df_est[col_prod] if col_prod else 'Sem Nome'
+    df_est['Produto'] = df_est[col_prod] if col_prod else 'Item Sem Nome'
     df_est['Cód.'] = df_est[col_cod[0]] if col_cod else ''
 
     # Classificação de Status
