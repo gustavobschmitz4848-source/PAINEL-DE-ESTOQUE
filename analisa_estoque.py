@@ -36,13 +36,29 @@ st.markdown("---")
 
 @st.cache_data
 def carregar_dados():
-    # Carregar planilha de estoque
-    df_raw = pd.read_excel('EstoqueReal.xls', sheet_name=0)
-    df_header = df_raw.iloc[6]
-    df_est = df_raw.iloc[8:].copy()
-    df_est.columns = df_header
-    df_est = df_est[df_est['Cód.'].notna()]
-    df_est = df_est[~df_est['Cód.'].isin(['Cód.', 'TOTAL', 'Totais'])].copy()
+    # 1. Carregar planilha
+    df_raw = pd.read_excel('EstoqueReal.xls', header=None)
+    
+    # Encontrar a linha do cabeçalho que contém 'Cód.'
+    idx_header = 0
+    for idx, row in df_raw.iterrows():
+        row_str = row.astype(str).values
+        if any('Cód' in item for item in row_str):
+            idx_header = idx
+            break
+
+    df_est = df_raw.iloc[idx_header + 1:].copy()
+    df_est.columns = df_raw.iloc[idx_header].values
+
+    # Remover colunas com nomes Nulos/NaN e linhas inválidas
+    df_est = df_est.loc[:, df_est.columns.notna()]
+    df_est.columns = [str(col).strip() for col in df_est.columns]
+
+    col_cod = [c for c in df_est.columns if 'Cód' in c]
+    if col_cod:
+        c_cod = col_cod[0]
+        df_est = df_est[df_est[c_cod].notna()]
+        df_est = df_est[~df_est[c_cod].astype(str).isin(['Cód.', 'Cód', 'TOTAL', 'Totais'])].copy()
 
     def extrair_num(val):
         if pd.isna(val): return 0.0
@@ -66,9 +82,27 @@ def carregar_dados():
         try: return float(s)
         except: return 0.0
 
-    df_est['Qtd_Disponivel'] = df_est['Disponível'].apply(extrair_num)
-    df_est['Preco_Custo_Unit'] = df_est['Preço Custo'].apply(converter_moeda)
-    df_est['Valor_Custo_Total'] = df_est['Preço Total de Custo'].apply(converter_moeda)
+    # Busca dinâmica pelas colunas principais
+    def buscar_coluna(padrao_nome, padrao_fallback):
+        for col in df_est.columns:
+            if padrao_nome.lower() in col.lower():
+                return col
+        for col in df_est.columns:
+            if padrao_fallback.lower() in col.lower():
+                return col
+        return None
+
+    col_disp = buscar_coluna('Disponível', 'Disp')
+    col_custo_unit = buscar_coluna('Preço Custo', 'Custo')
+    col_custo_tot = buscar_coluna('Preço Total de Custo', 'Total')
+    col_prod = buscar_coluna('Produto', 'Descrição')
+
+    # Renomear/Garantir mapeamento correto
+    df_est['Qtd_Disponivel'] = df_est[col_disp].apply(extrair_num) if col_disp else 0.0
+    df_est['Preco_Custo_Unit'] = df_est[col_custo_unit].apply(converter_moeda) if col_custo_unit else 0.0
+    df_est['Valor_Custo_Total'] = df_est[col_custo_tot].apply(converter_moeda) if col_custo_tot else (df_est['Qtd_Disponivel'] * df_est['Preco_Custo_Unit'])
+    df_est['Produto'] = df_est[col_prod] if col_prod else 'Sem Nome'
+    df_est['Cód.'] = df_est[col_cod[0]] if col_cod else ''
 
     # Classificação de Status
     def classificar_status(row):
@@ -96,7 +130,7 @@ m4.metric("Itens Saturados/Excesso", f"{len(df[df['Status_Estoque'].str.contains
 
 st.markdown("---")
 
-# Abas de Navegação por Categoria
+# Abas de Navegação
 aba1, aba2, aba3, aba4, aba5 = st.tabs([
     "📊 Visão Geral", 
     "🔴 Estoque Saturado / Parado", 
