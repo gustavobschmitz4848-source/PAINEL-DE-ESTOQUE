@@ -1,135 +1,149 @@
+import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import streamlit as st
 import re
 
-# Configuração de Página Streamlit
-st.set_page_config(page_title="Análise de Estoque e Excessos", layout="wide")
+# Configuração da Página
+st.set_page_config(
+    page_title="Painel Integrado de Estoque",
+    page_icon="📦",
+    layout="wide"
+)
 
-# CSS Customizado para impedir que as métricas cortem
+# Estilização CSS
 st.markdown("""
     <style>
-    [data-testid="stMetricValue"] {
-        font-size: 1.5rem !important;
-        font-weight: bold !important;
-        white-space: nowrap !important;
-    }
-    [data-testid="stMetricLabel"] {
-        font-size: 0.90rem !important;
-    }
+    .main { padding-top: 1rem; }
+    .stMetric { background-color: #f8f9fa; padding: 12px; border-radius: 8px; border: 1px solid #e9ecef; }
     </style>
 """, unsafe_allow_html=True)
 
-def extrair_disponivel(val):
-    """
-    Extrai a quantidade correta de barras ou unidades de textos como '2022ml (337 br)'
-    """
-    if pd.isna(val):
-        return 0.0
-    val_str = str(val).strip()
-    
-    # Busca por números dentro do parênteses (ex: '337 br')
-    match_br = re.search(r'\((.*?)\)', val_str)
-    if match_br:
-        conteudo = match_br.group(1)
-        num_match = re.search(r'[\d\.\,]+', conteudo)
-        if num_match:
-            num_s = num_match.group(0).replace('.', '').replace(',', '.')
-            try:
-                return float(num_s)
-            except:
-                pass
-                
-    # Caso não tenha parênteses, limpa sufixos de m², ml, etc.
-    cleaned = re.sub(r'[^\d\,\.]', '', val_str)
-    if not cleaned:
-        return 0.0
-    if ',' in cleaned:
-        cleaned = cleaned.replace('.', '').replace(',', '.')
+# Topo: Logo + Título + Nome dos Elaboradores
+col_logo, col_titulo = st.columns([1, 4])
+
+with col_logo:
     try:
-        return float(cleaned)
+        st.image('logo.png', width=160)
     except:
-        return 0.0
+        st.write("📦 **[LOGO]**")
 
-def converter_moeda(val):
-    """
-    Limpa caracteres de moeda R$ e converte com precisão para float
-    """
-    if pd.isna(val):
-        return 0.0
-    if isinstance(val, (int, float)):
-        return float(val)
-    s = str(val).replace('R$', '').replace(' ', '').strip()
-    if ',' in s:
-        s = s.replace('.', '').replace(',', '.')
-    try:
-        return float(s)
-    except:
-        return 0.0
-
-@st.cache_data
-def carregar_dados():
-    df_raw = pd.read_excel('EstoqueReal.xls', sheet_name=0)
-    df_header = df_raw.iloc[6]
-    df = df_raw.iloc[8:].copy()
-    df.columns = df_header
-    df = df[df['Cód.'].notna()]
-    df = df[~df['Cód.'].isin(['Cód.', 'TOTAL', 'Totais'])]
-    
-    # Tratamento das colunas numéricas
-    df['Qtd_Disponivel'] = df['Disponível'].apply(extrair_disponivel)
-    df['Valor_Custo_Total'] = df['Preço Total de Custo'].apply(converter_moeda)
-    df['Valor_Venda_Total'] = df['Preço Total de Venda'].apply(converter_moeda)
-    
-    # Cálculo seguro do custo unitário por barra/unidade
-    df['Custo_Unitario'] = np.where(
-        df['Qtd_Disponivel'] > 0,
-        df['Valor_Custo_Total'] / df['Qtd_Disponivel'],
-        0.0
-    )
-    
-    return df
-
-df = carregar_dados()
-
-st.title("📦 Painel de Análise de Estoque e Excessos")
-
-# Top Cards de Métricas sem cortes
-total_itens = len(df)
-total_est_investido = df['Valor_Custo_Total'].sum()
-total_pecas = df['Qtd_Disponivel'].sum()
-
-col1, col2, col3 = st.columns(3)
-col1.metric("Total de Itens Cadastrados", f"{total_itens:,}".replace(',', '.'))
-col2.metric("Est. Investimento (Custo)", f"R$ {total_est_investido:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'))
-col3.metric("Quantidade Total em Estoque", f"{total_pecas:,.0f}".replace(',', '.'))
+with col_titulo:
+    st.title("Painel Integrado de Gestão de Estoque")
+    st.caption("Elaborado por: **EXPEDIÇÃO & LOGÍSTICA** | Sistema WGlass")
 
 st.markdown("---")
 
-# Gráfico Top 10 Capital Imobilizado sem Notação Científica
-top10 = df.sort_values(by='Valor_Custo_Total', ascending=False).head(10).copy()
+@st.cache_data
+def carregar_dados():
+    # Carregar planilha de estoque
+    df_raw = pd.read_excel('EstoqueReal.xls', sheet_name=0)
+    df_header = df_raw.iloc[6]
+    df_est = df_raw.iloc[8:].copy()
+    df_est.columns = df_header
+    df_est = df_est[df_est['Cód.'].notna()]
+    df_est = df_est[~df_est['Cód.'].isin(['Cód.', 'TOTAL', 'Totais'])].copy()
 
-fig = px.bar(
-    top10,
-    x='Valor_Custo_Total',
-    y='Produto',
-    orientation='h',
-    text='Valor_Custo_Total',
-    title="Top 10 Produtos com Maior Capital Imobilizado em Estoque (R$)"
-)
+    def extrair_num(val):
+        if pd.isna(val): return 0.0
+        val_str = str(val).strip()
+        match_br = re.search(r'\((.*?)\)', val_str)
+        if match_br:
+            c = match_br.group(1)
+            nm = re.search(r'[\d\.\,]+', c)
+            if nm: return float(nm.group(0).replace('.', '').replace(',', '.'))
+        cleaned = re.sub(r'[^\d\,\.]', '', val_str)
+        if not cleaned: return 0.0
+        if ',' in cleaned: cleaned = cleaned.replace('.', '').replace(',', '.')
+        try: return float(cleaned)
+        except: return 0.0
 
-# Força formatação monetária direta nos rótulos e eixos do Plotly
-fig.update_traces(
-    texttemplate='R$ %{x:,.2f}', 
-    textposition='outside'
-)
-fig.update_layout(
-    xaxis_title="Valor Imobilizado (R$)",
-    yaxis_title="Produto",
-    yaxis=dict(autorange="reversed"),
-    xaxis=dict(showgrid=True, tickprefix="R$ "),
-    height=500
-)
+    def converter_moeda(val):
+        if pd.isna(val): return 0.0
+        if isinstance(val, (int, float)): return float(val)
+        s = str(val).replace('R$', '').replace(' ', '').strip()
+        if ',' in s: s = s.replace('.', '').replace(',', '.')
+        try: return float(s)
+        except: return 0.0
 
-st.plotly_chart(fig, use_container_width=True)
+    df_est['Qtd_Disponivel'] = df_est['Disponível'].apply(extrair_num)
+    df_est['Preco_Custo_Unit'] = df_est['Preço Custo'].apply(converter_moeda)
+    df_est['Valor_Custo_Total'] = df_est['Preço Total de Custo'].apply(converter_moeda)
+
+    # Classificação de Status
+    def classificar_status(row):
+        qtd = row['Qtd_Disponivel']
+        if qtd <= 0:
+            return '🚨 HORA DE COMPRAR (ZERADO)'
+        elif qtd < 20:
+            return '⚠️ ATENÇÃO (ESTOQUE BAIXO)'
+        elif qtd > 1000:
+            return '🔴 ESTOQUE SATURADO / EXCESSO'
+        else:
+            return '✅ ESTOQUE CERTO / IDEAL'
+
+    df_est['Status_Estoque'] = df_est.apply(classificar_status, axis=1)
+    return df_est
+
+df = carregar_dados()
+
+# Cards do Topo
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Total de Itens", f"{len(df):,}".replace(',', '.'))
+m2.metric("Investimento Total", f"R$ {df['Valor_Custo_Total'].sum():,.2f}".replace('.', 'X').replace(',', '.').replace('X', ','))
+m3.metric("Unidades em Estoque", f"{df['Qtd_Disponivel'].sum():,.0f}".replace(',', '.'))
+m4.metric("Itens Saturados/Excesso", f"{len(df[df['Status_Estoque'].str.contains('SATURADO')]):,}".replace(',', '.'))
+
+st.markdown("---")
+
+# Abas de Navegação por Categoria
+aba1, aba2, aba3, aba4, aba5 = st.tabs([
+    "📊 Visão Geral", 
+    "🔴 Estoque Saturado / Parado", 
+    "🚨 Hora de Comprar", 
+    "✅ Estoque Certo / Ideal",
+    "🔍 Consulta por Produto"
+])
+
+with aba1:
+    col_graf1, col_graf2 = st.columns(2)
+    with col_graf1:
+        st.subheader("Divisão dos Status do Estoque")
+        df_status = df['Status_Estoque'].value_counts().reset_index()
+        df_status.columns = ['Status', 'Quantidade']
+        fig_pie = px.pie(df_status, names='Status', values='Quantidade', hole=0.4,
+                         color_discrete_sequence=['#ff4b4b', '#ffa800', '#00c853', '#29b6f6'])
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    with col_graf2:
+        st.subheader("Top 10 Capital Imobilizado (R$)")
+        top10 = df.sort_values(by='Valor_Custo_Total', ascending=False).head(10)
+        fig_bar = px.bar(top10, x='Valor_Custo_Total', y='Produto', orientation='h',
+                         labels={'Valor_Custo_Total': 'Custo Total (R$)', 'Produto': 'Produto'},
+                         color='Valor_Custo_Total', color_continuous_scale='Blues')
+        fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+with aba2:
+    st.subheader("🔴 Estoque Saturado e Capital Imobilizado")
+    df_saturado = df[df['Status_Estoque'].str.contains('SATURADO')].sort_values(by='Valor_Custo_Total', ascending=False)
+    st.dataframe(df_saturado[['Cód.', 'Produto', 'Qtd_Disponivel', 'Preco_Custo_Unit', 'Valor_Custo_Total']], use_container_width=True)
+
+with aba3:
+    st.subheader("🚨 Itens para Reposição Urgente (Hora de Comprar)")
+    df_comprar = df[df['Status_Estoque'].str.contains('HORA DE COMPRAR|ATENÇÃO')].sort_values(by='Qtd_Disponivel', ascending=True)
+    st.dataframe(df_comprar[['Cód.', 'Produto', 'Qtd_Disponivel', 'Preco_Custo_Unit', 'Valor_Custo_Total']], use_container_width=True)
+
+with aba4:
+    st.subheader("✅ Itens com Estoque Balanceado / Certo")
+    df_certo = df[df['Status_Estoque'].str.contains('CERTO')].sort_values(by='Qtd_Disponivel', ascending=False)
+    st.dataframe(df_certo[['Cód.', 'Produto', 'Qtd_Disponivel', 'Preco_Custo_Unit', 'Valor_Custo_Total']], use_container_width=True)
+
+with aba5:
+    st.subheader("🔍 Buscar Qualquer Produto no Sistema")
+    busca = st.text_input("Digite o nome ou código do item:")
+    if busca:
+        df_filt = df[df['Produto'].astype(str).str.contains(busca, case=False) | df['Cód.'].astype(str).str.contains(busca, case=False)]
+        st.dataframe(df_filt[['Cód.', 'Produto', 'Qtd_Disponivel', 'Status_Estoque', 'Valor_Custo_Total']], use_container_width=True)
+    else:
+        st.dataframe(df[['Cód.', 'Produto', 'Qtd_Disponivel', 'Status_Estoque', 'Valor_Custo_Total']], use_container_width=True)
