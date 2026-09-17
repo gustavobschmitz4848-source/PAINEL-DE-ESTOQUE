@@ -4,14 +4,12 @@ import numpy as np
 import plotly.express as px
 import re
 
-# Configuração da Página
 st.set_page_config(
-    page_title="Painel Integrado de Estoque",
+    page_title="Painel de Gestão e Giro de Estoque",
     page_icon="📦",
     layout="wide"
 )
 
-# Estilização CSS
 st.markdown("""
     <style>
     .main { padding-top: 1rem; }
@@ -19,9 +17,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Topo: Logo + Título + Nome dos Elaboradores
+# Topo
 col_logo, col_titulo = st.columns([1, 4])
-
 with col_logo:
     try:
         st.image('logo.png', width=160)
@@ -29,37 +26,25 @@ with col_logo:
         st.write("📦 **[LOGO]**")
 
 with col_titulo:
-    st.title("Painel Integrado de Gestão de Estoque")
+    st.title("Painel de Gestão e Giro de Estoque - Temper Plus")
     st.caption("Elaborado por: **EXPEDIÇÃO & LOGÍSTICA** | Sistema WGlass")
 
 st.markdown("---")
 
 @st.cache_data
 def carregar_dados():
-    # 1. Carregar planilha ignorando erros de tipo
+    # 1. Carregar EstoqueReal
     df_raw = pd.read_excel('EstoqueReal.xls', header=None)
-    
-    # Identificar a linha do cabeçalho que contém a palavra 'Cód'
-    idx_header = 6 # Padrão do relatório WGlass
+    idx_header = 6
     for idx in range(min(15, len(df_raw))):
         linha_texto = " ".join([str(v) for v in df_raw.iloc[idx].values if pd.notna(v)])
         if 'Cód' in linha_texto:
             idx_header = idx
             break
 
-    # Definir cabeçalho e dados
     df_est = df_raw.iloc[idx_header + 1:].copy()
     df_est.columns = [str(c).strip() for c in df_raw.iloc[idx_header].values]
-
-    # Limpar colunas nulas
     df_est = df_est.loc[:, ~df_est.columns.str.contains('nan|None', case=False, na=False)]
-
-    # Identificar coluna de Código
-    col_cod = [c for c in df_est.columns if 'Cód' in c]
-    if col_cod:
-        c_cod = col_cod[0]
-        df_est = df_est[df_est[c_cod].notna()]
-        df_est = df_est[~df_est[c_cod].astype(str).str.upper().isin(['CÓD.', 'CÓD', 'TOTAL', 'TOTAIS'])].copy()
 
     def extrair_num(val):
         if pd.isna(val): return 0.0
@@ -83,98 +68,139 @@ def carregar_dados():
         try: return float(s)
         except: return 0.0
 
-    # Busca segura pelas colunas principais
-    def buscar_coluna(padrao):
-        for col in df_est.columns:
+    def buscar_coluna(df, padrao):
+        for col in df.columns:
             if padrao.lower() in str(col).lower():
                 return col
         return None
 
-    col_disp = buscar_coluna('Disponível') or buscar_coluna('Disp')
-    col_custo_unit = buscar_coluna('Preço Custo') or buscar_coluna('Custo')
-    col_custo_tot = buscar_coluna('Preço Total de Custo') or buscar_coluna('Total')
-    col_prod = buscar_coluna('Produto') or buscar_coluna('Descrição')
+    col_cod = buscar_coluna(df_est, 'Cód')
+    col_disp = buscar_coluna(df_est, 'Disponível') or buscar_coluna(df_est, 'Disp')
+    col_custo_unit = buscar_coluna(df_est, 'Preço Custo') or buscar_coluna(df_est, 'Custo')
+    col_custo_tot = buscar_coluna(df_est, 'Preço Total de Custo') or buscar_coluna(df_est, 'Total')
+    col_prod = buscar_coluna(df_est, 'Produto') or buscar_coluna(df_est, 'Descrição')
 
+    df_est = df_est[df_est[col_cod].notna()].copy()
+    df_est = df_est[~df_est[col_cod].astype(str).str.upper().isin(['CÓD.', 'CÓD', 'TOTAL', 'TOTAIS'])].copy()
+
+    df_est['Cód.'] = df_est[col_cod].astype(str).str.strip()
     df_est['Qtd_Disponivel'] = df_est[col_disp].apply(extrair_num) if col_disp else 0.0
     df_est['Preco_Custo_Unit'] = df_est[col_custo_unit].apply(converter_moeda) if col_custo_unit else 0.0
     df_est['Valor_Custo_Total'] = df_est[col_custo_tot].apply(converter_moeda) if col_custo_tot else (df_est['Qtd_Disponivel'] * df_est['Preco_Custo_Unit'])
-    df_est['Produto'] = df_est[col_prod] if col_prod else 'Item Sem Nome'
-    df_est['Cód.'] = df_est[col_cod[0]] if col_cod else ''
+    df_est['Produto'] = df_est[col_prod] if col_prod else 'Sem Nome'
 
-    # Classificação de Status
-    def classificar_status(row):
-        qtd = row['Qtd_Disponivel']
-        if qtd <= 0:
-            return '🚨 HORA DE COMPRAR (ZERADO)'
-        elif qtd < 20:
-            return '⚠️ ATENÇÃO (ESTOQUE BAIXO)'
-        elif qtd > 1000:
-            return '🔴 ESTOQUE SATURADO / EXCESSO'
+    # 2. Carregar Vendas (vendasProd.xls)
+    try:
+        df_v = pd.read_excel('vendasProd.xls')
+        c_v_cod = buscar_coluna(df_v, 'Cód') or df_v.columns[0]
+        c_v_qtd = buscar_coluna(df_v, 'Qtd') or buscar_coluna(df_v, 'Quantidade') or df_v.columns[1]
+        
+        df_v['Cód.'] = df_v[c_v_cod].astype(str).str.strip()
+        df_v['Qtd_Vendida_Ano'] = df_v[c_v_qtd].apply(extrair_num)
+        
+        df_v_agrupado = df_v.groupby('Cód.')['Qtd_Vendida_Ano'].sum().reset_index()
+        df = pd.merge(df_est, df_v_agrupado, on='Cód.', how='left')
+        df['Qtd_Vendida_Ano'] = df['Qtd_Vendida_Ano'].fillna(0.0)
+    except:
+        df = df_est.copy()
+        df['Qtd_Vendida_Ano'] = 0.0
+
+    # 3. Cálculos de Giro
+    df['Giro_Diario'] = df['Qtd_Vendida_Ano'] / 365.0
+    df['Giro_Semanal'] = df['Qtd_Vendida_Ano'] / 52.0
+    df['Giro_Mensal'] = df['Qtd_Vendida_Ano'] / 12.0
+
+    # Dias de Cobertura de Estoque
+    df['Dias_Cobertura'] = np.where(df['Giro_Diario'] > 0, df['Qtd_Disponivel'] / df['Giro_Diario'], 9999)
+
+    # Classificação Analítica
+    def classificar_movimento(row):
+        if row['Qtd_Vendida_Ano'] <= 0 and row['Qtd_Disponivel'] > 0:
+            return '🧊 Sem Movimento (1 Ano+)'
+        elif row['Dias_Cobertura'] > 180 and row['Qtd_Disponivel'] > 0:
+            return '🐢 Movimento Muito Baixo'
+        elif row['Qtd_Disponivel'] <= 0:
+            return '🚨 Hora de Comprar (Zerado)'
         else:
-            return '✅ ESTOQUE CERTO / IDEAL'
+            return '⚡ Giro Normal / Ideal'
 
-    df_est['Status_Estoque'] = df_est.apply(classificar_status, axis=1)
-    return df_est
+    df['Status_Giro'] = df.apply(classificar_movimento, axis=1)
+
+    return df
 
 df = carregar_dados()
 
-# Cards do Topo
+# Cards
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("Total de Itens", f"{len(df):,}".replace(',', '.'))
+m1.metric("Total de Produtos", f"{len(df):,}".replace(',', '.'))
 m2.metric("Investimento Total", f"R$ {df['Valor_Custo_Total'].sum():,.2f}".replace('.', 'X').replace(',', '.').replace('X', ','))
-m3.metric("Unidades em Estoque", f"{df['Qtd_Disponivel'].sum():,.0f}".replace(',', '.'))
-m4.metric("Itens Saturados/Excesso", f"{len(df[df['Status_Estoque'].str.contains('SATURADO')]):,}".replace(',', '.'))
+m3.metric("Sem Movimento (1 Ano)", f"{len(df[df['Status_Giro'].str.contains('Sem Movimento')]):,}".replace(',', '.'))
+m4.metric("Movimento Baixo (>180 dias)", f"{len(df[df['Status_Giro'].str.contains('Muito Baixo')]):,}".replace(',', '.'))
 
 st.markdown("---")
 
-# Abas de Navegação
-aba1, aba2, aba3, aba4, aba5 = st.tabs([
-    "📊 Visão Geral", 
-    "🔴 Estoque Saturado / Parado", 
-    "🚨 Hora de Comprar", 
-    "✅ Estoque Certo / Ideal",
-    "🔍 Consulta por Produto"
+# Abas Principais
+aba1, aba2, aba3, aba4 = st.tabs([
+    "📊 Visão Geral & Giro", 
+    "🧊 Sem Movimento / Baixo Giro", 
+    "📈 Análise Média de Giro (Dia/Sem/Mês)", 
+    "🔍 Relatório Completo"
 ])
 
 with aba1:
-    col_graf1, col_graf2 = st.columns(2)
-    with col_graf1:
-        st.subheader("Divisão dos Status do Estoque")
-        df_status = df['Status_Estoque'].value_counts().reset_index()
-        df_status.columns = ['Status', 'Quantidade']
-        fig_pie = px.pie(df_status, names='Status', values='Quantidade', hole=0.4,
-                         color_discrete_sequence=['#ff4b4b', '#ffa800', '#00c853', '#29b6f6'])
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Análise de Movimentação do Estoque")
+        fig_pie = px.pie(df, names='Status_Giro', hole=0.4,
+                         color_discrete_sequence=['#ef5350', '#ffb74d', '#26a69a', '#ab47bc'])
         st.plotly_chart(fig_pie, use_container_width=True)
 
-    with col_graf2:
+    with col2:
         st.subheader("Top 10 Capital Imobilizado (R$)")
         top10 = df.sort_values(by='Valor_Custo_Total', ascending=False).head(10)
         fig_bar = px.bar(top10, x='Valor_Custo_Total', y='Produto', orientation='h',
-                         labels={'Valor_Custo_Total': 'Custo Total (R$)', 'Produto': 'Produto'},
-                         color='Valor_Custo_Total', color_continuous_scale='Blues')
+                         color='Valor_Custo_Total', color_continuous_scale='Blues',
+                         labels={'Valor_Custo_Total': 'Valor em Estoque (R$)'})
         fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
         st.plotly_chart(fig_bar, use_container_width=True)
 
 with aba2:
-    st.subheader("🔴 Estoque Saturado e Capital Imobilizado")
-    df_saturado = df[df['Status_Estoque'].str.contains('SATURADO')].sort_values(by='Valor_Custo_Total', ascending=False)
-    st.dataframe(df_saturado[['Cód.', 'Produto', 'Qtd_Disponivel', 'Preco_Custo_Unit', 'Valor_Custo_Total']], use_container_width=True)
+    st.subheader("🧊 Produtos Parados Sem Movimento ou Com Baixo Giro")
+    filtro_status = st.multiselect(
+        "Filtrar Categoria:",
+        options=df['Status_Giro'].unique(),
+        default=['🧊 Sem Movimento (1 Ano+)', '🐢 Movimento Muito Baixo']
+    )
+    df_parado = df[df['Status_Giro'].isin(filtro_status)].sort_values(by='Valor_Custo_Total', ascending=False)
+    
+    st.write(f"**Total de Capital Imobilizado nos itens selecionados:** R$ {df_parado['Valor_Custo_Total'].sum():,.2f}".replace('.', 'X').replace(',', '.').replace('X', ','))
+    
+    st.dataframe(
+        df_parado[['Cód.', 'Produto', 'Qtd_Disponivel', 'Qtd_Vendida_Ano', 'Dias_Cobertura', 'Valor_Custo_Total', 'Status_Giro']],
+        use_container_width=True
+    )
 
 with aba3:
-    st.subheader("🚨 Itens para Reposição Urgente (Hora de Comprar)")
-    df_comprar = df[df['Status_Estoque'].str.contains('HORA DE COMPRAR|ATENÇÃO')].sort_values(by='Qtd_Disponivel', ascending=True)
-    st.dataframe(df_comprar[['Cód.', 'Produto', 'Qtd_Disponivel', 'Preco_Custo_Unit', 'Valor_Custo_Total']], use_container_width=True)
+    st.subheader("📈 Média de Consumo/Giro por Item")
+    st.write("Estimativa baseada no histórico de vendas do `vendasProd.xls`:")
+    
+    st.dataframe(
+        df[['Cód.', 'Produto', 'Qtd_Disponivel', 'Giro_Diario', 'Giro_Semanal', 'Giro_Mensal', 'Dias_Cobertura']]
+        .sort_values(by='Giro_Mensal', ascending=False),
+        column_config={
+            "Giro_Diario": st.column_config.NumberColumn("Média Diária", format="%.2f"),
+            "Giro_Semanal": st.column_config.NumberColumn("Média Semanal", format="%.2f"),
+            "Giro_Mensal": st.column_config.NumberColumn("Média Mensal", format="%.2f"),
+            "Dias_Cobertura": st.column_config.NumberColumn("Cobertura (Dias)", format="%.0f d"),
+        },
+        use_container_width=True
+    )
 
 with aba4:
-    st.subheader("✅ Itens com Estoque Balanceado / Certo")
-    df_certo = df[df['Status_Estoque'].str.contains('CERTO')].sort_values(by='Qtd_Disponivel', ascending=False)
-    st.dataframe(df_certo[['Cód.', 'Produto', 'Qtd_Disponivel', 'Preco_Custo_Unit', 'Valor_Custo_Total']], use_container_width=True)
-
-with aba5:
-    st.subheader("🔍 Buscar Qualquer Produto no Sistema")
-    busca = st.text_input("Digite o nome ou código do item:")
+    st.subheader("🔍 Filtro Geral e Exportação")
+    busca = st.text_input("Buscar Produto por Nome ou Código:")
+    df_exp = df.copy()
     if busca:
-        df_filt = df[df['Produto'].astype(str).str.contains(busca, case=False) | df['Cód.'].astype(str).str.contains(busca, case=False)]
-        st.dataframe(df_filt[['Cód.', 'Produto', 'Qtd_Disponivel', 'Status_Estoque', 'Valor_Custo_Total']], use_container_width=True)
-    else:
-        st.dataframe(df[['Cód.', 'Produto', 'Qtd_Disponivel', 'Status_Estoque', 'Valor_Custo_Total']], use_container_width=True)
+        df_exp = df_exp[df_exp['Produto'].astype(str).str.contains(busca, case=False) | df_exp['Cód.'].astype(str).str.contains(busca, case=False)]
+    
+    st.dataframe(df_exp[['Cód.', 'Produto', 'Qtd_Disponivel', 'Qtd_Vendida_Ano', 'Giro_Mensal', 'Valor_Custo_Total', 'Status_Giro']], use_container_width=True)
