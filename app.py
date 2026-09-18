@@ -34,8 +34,11 @@ TP_AZUL_ESCURO = "#0F2557"
 TP_AZUL_CLARO  = "#21A0B5"
 TP_BRANCO      = "#FFFFFF"
 TP_PRETO       = "#0D1117"
-TP_CINZA_FUNDO = "#F5F7FA"
-TP_CINZA_BORDA = "#E1E7ED"
+TP_CINZA_FUNDO = "#C9D3E0"   # fundo do site (mais escuro para destacar os gráficos)
+TP_CINZA_BORDA = "#9FB0C4"
+
+# Escala para gráficos contínuos (as barras claras continuam visíveis)
+ESCALA_AZUL = [[0.0, "#7FB8C4"], [0.5, "#21A0B5"], [1.0, "#0F2557"]]
 
 # ---------- GRUPOS ----------
 GRUPOS_CONFIG = {
@@ -202,12 +205,40 @@ st.markdown(f"""
     background-color: {TP_AZUL_ESCURO};
   }}
 
+  /* ---------- Sidebar ---------- */
   section[data-testid="stSidebar"] {{
-    background-color: {TP_BRANCO};
-    border-right: 2px solid {TP_AZUL_CLARO};
+    background-color: #E4EAF2;
+    border-right: 3px solid {TP_AZUL_CLARO};
   }}
   section[data-testid="stSidebar"] h2,
   section[data-testid="stSidebar"] h3 {{ color: {TP_AZUL_ESCURO}; }}
+
+  /* Tags dos filtros: azul da marca em vez de vermelho */
+  span[data-baseweb="tag"] {{
+    background-color: {TP_AZUL_ESCURO} !important;
+    border-radius: 6px;
+  }}
+  span[data-baseweb="tag"] span,
+  span[data-baseweb="tag"] svg {{
+    color: {TP_BRANCO} !important;
+    fill: {TP_BRANCO} !important;
+  }}
+
+  /* Campos de filtro com contorno visível */
+  section[data-testid="stSidebar"] div[data-baseweb="select"] > div,
+  section[data-testid="stSidebar"] input {{
+    background-color: {TP_BRANCO};
+    border: 1px solid {TP_CINZA_BORDA};
+  }}
+
+  /* ---------- Gráficos em cards brancos ---------- */
+  div[data-testid="stPlotlyChart"] {{
+    background-color: {TP_BRANCO};
+    border: 1px solid {TP_CINZA_BORDA};
+    border-radius: 12px;
+    padding: 10px;
+    box-shadow: 0 3px 10px rgba(15,37,87,0.15);
+  }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -919,7 +950,7 @@ with t5:
         with c1:
             st.markdown("#### Top 20 — Maior Lucro (R$)")
             fig = px.bar(top_lucro, x="Lucro_Periodo", y="Codigo", orientation="h",
-                         color="Margem_%", color_continuous_scale="Blues",
+                         color="Margem_%", color_continuous_scale=ESCALA_AZUL,
                          labels={"Lucro_Periodo": "Lucro (R$)", "Codigo": "Código"})
             fig.update_layout(yaxis={"categoryorder": "total ascending"},
                               paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
@@ -931,7 +962,7 @@ with t5:
             top_margem = df[(df["Vendido"] > 1000) & df["Margem_%"].notna()].sort_values(
                 "Margem_%", ascending=False).head(20).copy()
             fig = px.bar(top_margem, x="Margem_%", y="Codigo", orientation="h",
-                         color="Margem_%", color_continuous_scale="Blues",
+                         color="Margem_%", color_continuous_scale=ESCALA_AZUL,
                          labels={"Margem_%": "Margem (%)", "Codigo": "Código"})
             fig.update_layout(yaxis={"categoryorder": "total ascending"},
                               paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
@@ -1128,7 +1159,7 @@ with t8:
 # ---------- RODAPÉ ----------
 st.markdown("---")
 st.markdown(
-    "<div style='text-align:center; color:#6c757d; font-size:0.9rem;'>"
+    "<div style='text-align:center; color:#3A4A5C; font-size:0.9rem;'>"
     "Temper Plus • Gestão Logística Integrada | "
     "Elaborado por <b>André Luiz</b> &amp; <b>Gustavo Schmitz</b></div>",
     unsafe_allow_html=True,
