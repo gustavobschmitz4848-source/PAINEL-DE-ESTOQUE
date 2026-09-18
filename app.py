@@ -30,9 +30,6 @@ LOGO = "logo.png"
 COMPRIMENTO_BARRA_M = 6.0
 
 # ---------- CONFIGURAÇÃO POR GRUPO ----------
-# lead_time      = dias que o fornecedor leva para entregar
-# dias_seguranca = margem em dias (protege contra atrasos / picos)
-# dias_cobertura = dias extras de giro acima do ponto de pedido (vira estoque máximo)
 GRUPOS_CONFIG = {
     "PERFIL DE ALUMINIO": {"lead_time": 52, "dias_seguranca": 10, "dias_cobertura": 30, "label": "Perfis de Alumínio",  "cor": "#1976d2"},
     "GUARNIÇ":            {"lead_time": 20, "dias_seguranca": 5,  "dias_cobertura": 20, "label": "Guarnições",          "cor": "#7b1fa2"},
@@ -114,8 +111,6 @@ def limpar_moeda(v):
 
 
 def extrair_qtd_unidade(valor, grupo):
-    """Devolve (quantidade, unidade).
-       Perfis de alumínio → barras ('br'). Resto mantém a unidade natural."""
     if pd.isna(valor):
         return 0.0, "un"
     s = str(valor).strip()
@@ -165,6 +160,9 @@ def carregar_estoque(caminho):
     df["Produto"] = df["Produto"].astype(str).str.strip()
     df["Grupo"] = df["Grupo/ Subgrupo"].astype(str).str.strip()
 
+    # 🚫 Remove códigos terminados em -M (são metros internos do pedido)
+    df = df[~df["Codigo"].str.upper().str.endswith("-M")].copy()
+
     disp = df.apply(lambda r: extrair_qtd_unidade(r.get("Disponível", 0), r["Grupo"]), axis=1)
     total = df.apply(lambda r: extrair_qtd_unidade(r.get("Qtd. em Estoque", 0), r["Grupo"])[0], axis=1)
 
@@ -193,6 +191,10 @@ def carregar_vendas(caminho):
     df = df[~df["Cod."].astype(str).isin(["Cod.", "TOTAL", "Totais"])].copy()
 
     df["Codigo"] = df["Cod."].astype(str).str.strip()
+
+    # 🚫 Remove -M também das vendas
+    df = df[~df["Codigo"].str.upper().str.endswith("-M")].copy()
+
     df["Qtde"] = df["Qtde"].apply(numero_br)
     df["Metros"] = df["Total M²"].apply(
         lambda v: numero_br(re.sub(r"ml", "", str(v), flags=re.IGNORECASE))
@@ -206,12 +208,43 @@ def carregar_vendas(caminho):
 # ============================================================
 # CÁLCULOS
 # ============================================================
+def gerar_folego(row):
+    """Gera um texto amigável resumindo a saúde do estoque."""
+    aut = row["Autonomia"]
+    lt = row["Lead_Time"]
+    giro = row["Giro_Diario"]
+    status = row["Status"]
+
+    if giro == 0:
+        if row["Qtd_Disponivel"] == 0:
+            return "Sem estoque e sem vendas no período"
+        return f"Parado — {row['Qtd_Disponivel']:.0f} un. sem giro"
+
+    if pd.isna(aut):
+        return "—"
+
+    if status == "🔴 URGENTE":
+        if aut < lt:
+            return f"⏰ Acaba em {aut:.0f} d — fornecedor leva {lt} d (⚠️ risco de ruptura)"
+        return f"Acaba em {aut:.0f} d — abaixo do mínimo"
+    if status == "🚨 COMPRAR":
+        return f"Acaba em {aut:.0f} d — fornecedor leva {lt} d"
+    if status == "⚠️ SATURADO":
+        if aut > 365:
+            return f"Parado há mais de 1 ano ({aut:.0f} d de estoque)"
+        return f"Excesso — {aut:.0f} d de estoque parado"
+    # OK
+    folga = aut - lt
+    if folga > 30:
+        return f"Confortável — {aut:.0f} d de autonomia (folga de {folga:.0f} d)"
+    return f"OK — {aut:.0f} d de autonomia (folga de {folga:.0f} d)"
+
+
 def montar_painel(df_est, df_vend, dias):
     df = df_est.merge(df_vend, on="Codigo", how="left")
     for c in ("Qtde", "Metros", "Vendido"):
         df[c] = df[c].fillna(0)
 
-    # Vendas convertidas para a unidade do estoque
     def vendas_na_unidade(r):
         if r["Unidade"] == "br":
             return round(r["Metros"] / COMPRIMENTO_BARRA_M, 2)
@@ -222,7 +255,6 @@ def montar_painel(df_est, df_vend, dias):
     df["Vendas_Periodo"] = df.apply(vendas_na_unidade, axis=1)
     df["Giro_Diario"] = (df["Vendas_Periodo"] / dias).round(3)
 
-    # Config do grupo (lead time, segurança, cobertura, label, cor)
     cfgs = df["Grupo"].apply(config_do_grupo)
     df["Lead_Time"] = [c["lead_time"] for c in cfgs]
     df["Dias_Seguranca"] = [c["dias_seguranca"] for c in cfgs]
@@ -230,7 +262,6 @@ def montar_painel(df_est, df_vend, dias):
     df["Grupo_Label"] = [c["label"] for c in cfgs]
     df["Grupo_Cor"] = [c["cor"] for c in cfgs]
 
-    # ---------- FÓRMULAS DE ESTOQUE ----------
     df["Estoque_Seguranca"] = (df["Giro_Diario"] * df["Dias_Seguranca"]).round(2)
     df["Estoque_Minimo"] = df["Estoque_Seguranca"]
     df["Ponto_Pedido"] = (
@@ -256,13 +287,11 @@ def montar_painel(df_est, df_vend, dias):
     df["Valor_Imobilizado"] = (df["Qtd_Disponivel"] * df["Custo_Unit"]).round(2)
     df["Faturamento"] = (df["Vendido"] / dias * 365).round(2)
 
-    # Data prevista de chegada se comprar hoje
     hoje = datetime.today().date()
     df["Chegada_Se_Comprar"] = [
         (hoje + timedelta(days=int(lt))).strftime("%d/%m/%Y") for lt in df["Lead_Time"]
     ]
 
-    # ---------- STATUS ----------
     def status(r):
         if r["Giro_Diario"] == 0:
             return "⚪ Sem Movimento" if r["Qtd_Disponivel"] == 0 else "⚪ Parado"
@@ -276,7 +305,10 @@ def montar_painel(df_est, df_vend, dias):
 
     df["Status"] = df.apply(status, axis=1)
 
-    # ---------- CURVA ABC ----------
+    # Fôlego depende de Status e Autonomia, calcula agora
+    df["Fôlego"] = df.apply(gerar_folego, axis=1)
+
+    # Curva ABC
     df = df.sort_values("Vendido", ascending=False).reset_index(drop=True)
     tot = df["Vendido"].sum()
     df["_pct"] = df["Vendido"].cumsum() / tot if tot > 0 else 1.0
@@ -325,9 +357,13 @@ except FileNotFoundError as e:
 
 df = montar_painel(df_est, df_vend, dias)
 
-st.caption(f"📅 Período: {dias} dias • 🗂️ {len(df)} itens • 🔄 Atualizado em {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+st.caption(
+    f"📅 Período: {dias} dias • 🗂️ {len(df)} itens • "
+    f"🚫 Códigos '-M' ocultados • "
+    f"🔄 Atualizado em {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+)
 
-# ---------- FILTROS NA SIDEBAR ----------
+# ---------- FILTROS ----------
 with st.sidebar:
     st.header("🔎 Filtros")
 
@@ -344,15 +380,14 @@ with st.sidebar:
     busca = st.text_input("🔍 Nome ou código:")
 
     st.markdown("---")
-    st.caption("💡 Filtros afetam as abas **Análise por Grupo** e **Consulta**.")
+    st.caption("💡 Filtros afetam as abas Análise por Grupo e Consulta.")
 
-# Aplica filtros
 dff = df[df["Grupo_Label"].isin(grupos_sel) & df["Status"].isin(status_sel) & df["Curva_ABC"].isin(curva_sel)]
 if busca:
     dff = dff[dff["Produto"].str.contains(busca, case=False, na=False)
               | dff["Codigo"].str.contains(busca, case=False, na=False)]
 
-# ---------- KPIs GLOBAIS ----------
+# ---------- KPIs ----------
 urgente = df[df["Status"] == "🔴 URGENTE"]
 comprar = df[df["Status"] == "🚨 COMPRAR"]
 saturado = df[df["Status"] == "⚠️ SATURADO"]
@@ -378,7 +413,7 @@ t1, t2, t3, t4, t5, t6 = st.tabs([
     "⚙️ Configuração",
 ])
 
-# ============ ABA 1 — VISÃO GERAL ============
+# ============ ABA 1 ============
 with t1:
     c1, c2 = st.columns(2)
     with c1:
@@ -432,41 +467,29 @@ with t1:
 with t2:
     st.subheader(f"🔴 Itens que precisam de reposição — {len(urgente) + len(comprar)} itens")
 
+    cols_mostrar = ["Codigo", "Produto", "Unidade", "Qtd_Disponivel",
+                    "Estoque_Minimo", "Ponto_Pedido", "Estoque_Maximo",
+                    "Qtd_Comprar", "Custo_Comprar", "Fôlego",
+                    "Lead_Time", "Chegada_Se_Comprar"]
+    renomear = {
+        "Codigo": "Código", "Produto": "Produto", "Unidade": "Un.",
+        "Qtd_Disponivel": "Disponível", "Estoque_Minimo": "Mínimo",
+        "Ponto_Pedido": "Pto. Pedido", "Estoque_Maximo": "Máximo",
+        "Qtd_Comprar": "Comprar", "Custo_Comprar": "Custo R$",
+        "Fôlego": "Fôlego", "Lead_Time": "Lead (d)",
+        "Chegada_Se_Comprar": "Chega em",
+    }
+
     if len(urgente):
         st.markdown("#### 🔴 Urgente — Já abaixo do Estoque Mínimo")
-        st.dataframe(
-            urgente[["Codigo", "Produto", "Unidade", "Qtd_Disponivel",
-                     "Estoque_Minimo", "Ponto_Pedido", "Qtd_Comprar",
-                     "Custo_Comprar", "Autonomia", "Lead_Time", "Chegada_Se_Comprar"]]
-                .rename(columns={
-                    "Codigo": "Código", "Produto": "Produto", "Unidade": "Un.",
-                    "Qtd_Disponivel": "Disponível", "Estoque_Minimo": "Mínimo",
-                    "Ponto_Pedido": "Pto. Pedido", "Qtd_Comprar": "Comprar",
-                    "Custo_Comprar": "Custo R$", "Autonomia": "Auton. (d)",
-                    "Lead_Time": "Lead (d)", "Chegada_Se_Comprar": "Chega em",
-                }),
-            use_container_width=True, hide_index=True,
-        )
+        st.dataframe(urgente[cols_mostrar].rename(columns=renomear),
+                     use_container_width=True, hide_index=True)
 
     if len(comprar):
         st.markdown("#### 🚨 Comprar — Atingiu o Ponto de Pedido")
-        st.dataframe(
-            comprar[["Codigo", "Produto", "Unidade", "Qtd_Disponivel",
-                     "Estoque_Minimo", "Ponto_Pedido", "Estoque_Maximo",
-                     "Qtd_Comprar", "Custo_Comprar", "Autonomia",
-                     "Lead_Time", "Chegada_Se_Comprar"]]
-                .rename(columns={
-                    "Codigo": "Código", "Produto": "Produto", "Unidade": "Un.",
-                    "Qtd_Disponivel": "Disponível", "Estoque_Minimo": "Mínimo",
-                    "Ponto_Pedido": "Pto. Pedido", "Estoque_Maximo": "Máximo",
-                    "Qtd_Comprar": "Comprar", "Custo_Comprar": "Custo R$",
-                    "Autonomia": "Auton. (d)", "Lead_Time": "Lead (d)",
-                    "Chegada_Se_Comprar": "Chega em",
-                }),
-            use_container_width=True, hide_index=True,
-        )
+        st.dataframe(comprar[cols_mostrar].rename(columns=renomear),
+                     use_container_width=True, hide_index=True)
 
-    # Exportação
     export = pd.concat([urgente, comprar])
     if len(export):
         cols_exp = ["Codigo", "Produto", "Grupo_Label", "Unidade",
@@ -490,14 +513,15 @@ with t3:
     if len(saturado):
         st.dataframe(
             saturado[["Codigo", "Produto", "Grupo_Label", "Unidade",
-                      "Qtd_Disponivel", "Estoque_Maximo", "Autonomia",
-                      "Valor_Imobilizado", "Curva_ABC"]]
+                      "Qtd_Disponivel", "Estoque_Maximo",
+                      "Fôlego", "Valor_Imobilizado", "Curva_ABC"]]
                 .sort_values("Valor_Imobilizado", ascending=False)
                 .rename(columns={
                     "Codigo": "Código", "Produto": "Produto",
                     "Grupo_Label": "Grupo", "Unidade": "Un.",
                     "Qtd_Disponivel": "Disponível", "Estoque_Maximo": "Máximo",
-                    "Autonomia": "Auton. (d)", "Valor_Imobilizado": "Capital R$",
+                    "Fôlego": "Fôlego",
+                    "Valor_Imobilizado": "Capital R$",
                     "Curva_ABC": "Curva",
                 }),
             use_container_width=True, hide_index=True,
@@ -541,7 +565,6 @@ with t4:
         fig.update_layout(showlegend=False, xaxis_tickangle=-30)
         st.plotly_chart(fig, use_container_width=True)
 
-    # Distribuição de status por grupo
     st.markdown("#### Status por Grupo")
     cross = pd.crosstab(dff["Grupo_Label"], dff["Status"])
     st.dataframe(cross, use_container_width=True)
@@ -555,14 +578,14 @@ with t5:
             dff[["Codigo", "Produto", "Grupo_Label", "Unidade",
                  "Qtd_Disponivel", "Giro_Diario", "Estoque_Minimo",
                  "Ponto_Pedido", "Estoque_Maximo", "Qtd_Comprar",
-                 "Autonomia", "Status", "Curva_ABC", "Valor_Imobilizado"]]
+                 "Fôlego", "Status", "Curva_ABC", "Valor_Imobilizado"]]
                 .rename(columns={
                     "Codigo": "Código", "Produto": "Produto",
                     "Grupo_Label": "Grupo", "Unidade": "Un.",
                     "Qtd_Disponivel": "Disponível", "Giro_Diario": "Giro/dia",
                     "Estoque_Minimo": "Mínimo", "Ponto_Pedido": "Pto. Pedido",
                     "Estoque_Maximo": "Máximo", "Qtd_Comprar": "Comprar",
-                    "Autonomia": "Auton. (d)", "Status": "Status",
+                    "Fôlego": "Fôlego", "Status": "Status",
                     "Curva_ABC": "Curva", "Valor_Imobilizado": "Capital R$",
                 }),
             use_container_width=True, hide_index=True, height=600,
@@ -598,6 +621,7 @@ with t6:
     - **Estoque Mínimo** = Estoque de Segurança
     - **Ponto de Pedido** = (Giro Diário × Lead Time) + Estoque de Segurança
     - **Estoque Máximo** = Ponto de Pedido + (Giro Diário × Dias de Cobertura)
+    - **Fôlego** = quantos dias o estoque dura no ritmo atual, comparado ao lead time
     - **Qtd a Comprar** = Estoque Máximo − Qtd Disponível (só quando ≤ Ponto de Pedido)
     """)
 
