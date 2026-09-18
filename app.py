@@ -30,6 +30,7 @@ LOGO = "logo.png"
 COMPRIMENTO_BARRA_M = 6.0
 
 # ---------- CONFIGURAÇÃO POR GRUPO ----------
+# ⚠️ VIDRO REMOVIDO conforme solicitado
 GRUPOS_CONFIG = {
     "PERFIL DE ALUMINIO": {"lead_time": 52, "dias_seguranca": 10, "dias_cobertura": 30, "label": "Perfis de Alumínio",  "cor": "#1976d2"},
     "GUARNIÇ":            {"lead_time": 20, "dias_seguranca": 5,  "dias_cobertura": 20, "label": "Guarnições",          "cor": "#7b1fa2"},
@@ -38,9 +39,17 @@ GRUPOS_CONFIG = {
     "KITS TERCEIROS":     {"lead_time": 20, "dias_seguranca": 5,  "dias_cobertura": 20, "label": "Kits de Terceiros",   "cor": "#ef6c00"},
     "KITS PRODU":         {"lead_time": 2,  "dias_seguranca": 1,  "dias_cobertura": 10, "label": "Kits de Produção",    "cor": "#2e7d32"},
     "KIT P/ MONTAGEM":    {"lead_time": 2,  "dias_seguranca": 1,  "dias_cobertura": 10, "label": "Kits p/ Montagem",    "cor": "#558b2f"},
-    "VIDRO":              {"lead_time": 15, "dias_seguranca": 3,  "dias_cobertura": 15, "label": "Vidros",              "cor": "#0277bd"},
 }
 PADRAO = {"lead_time": 20, "dias_seguranca": 5, "dias_cobertura": 20, "label": "Outros", "cor": "#616161"}
+
+STATUS_CORES = {
+    "🔴 URGENTE":       "#e53935",
+    "🚨 COMPRAR":       "#fb8c00",
+    "⚠️ SATURADO":      "#fdd835",
+    "✅ OK":            "#43a047",
+    "⚪ Parado":        "#9e9e9e",
+    "⚪ Sem Movimento": "#bdbdbd",
+}
 
 
 def config_do_grupo(grupo: str) -> dict:
@@ -79,6 +88,25 @@ st.markdown("""
   .kpi.warn   { border-left-color: #fb8c00; }
   .kpi.ok     { border-left-color: #43a047; }
   .kpi.info   { border-left-color: #1e88e5; }
+
+  .status-card {
+    padding: 16px 20px; border-radius: 10px; margin-bottom: 12px;
+    border-left: 6px solid; background: #f8f9fa;
+  }
+  .status-card h4 { margin: 0 0 6px 0; font-size: 1rem; }
+  .status-card p  { margin: 0; color: #555; font-size: 0.9rem; }
+  .s-urgente  { border-left-color: #e53935; background: #ffebee; }
+  .s-comprar  { border-left-color: #fb8c00; background: #fff3e0; }
+  .s-saturado { border-left-color: #fdd835; background: #fffde7; }
+  .s-ok       { border-left-color: #43a047; background: #e8f5e9; }
+  .s-parado   { border-left-color: #9e9e9e; background: #f5f5f5; }
+  .s-semmov   { border-left-color: #bdbdbd; background: #fafafa; }
+
+  .formula-box {
+    background: #f8f9fa; border-left: 4px solid #1e88e5;
+    padding: 12px 16px; border-radius: 6px; margin: 8px 0;
+    font-family: 'Courier New', monospace; font-size: 0.9rem;
+  }
 </style>
 """, unsafe_allow_html=True)
 
@@ -160,7 +188,7 @@ def carregar_estoque(caminho):
     df["Produto"] = df["Produto"].astype(str).str.strip()
     df["Grupo"] = df["Grupo/ Subgrupo"].astype(str).str.strip()
 
-    # 🚫 Remove códigos terminados em -M (são metros internos do pedido)
+    # 🚫 Remove -M
     df = df[~df["Codigo"].str.upper().str.endswith("-M")].copy()
 
     disp = df.apply(lambda r: extrair_qtd_unidade(r.get("Disponível", 0), r["Grupo"]), axis=1)
@@ -191,8 +219,6 @@ def carregar_vendas(caminho):
     df = df[~df["Cod."].astype(str).isin(["Cod.", "TOTAL", "Totais"])].copy()
 
     df["Codigo"] = df["Cod."].astype(str).str.strip()
-
-    # 🚫 Remove -M também das vendas
     df = df[~df["Codigo"].str.upper().str.endswith("-M")].copy()
 
     df["Qtde"] = df["Qtde"].apply(numero_br)
@@ -209,7 +235,6 @@ def carregar_vendas(caminho):
 # CÁLCULOS
 # ============================================================
 def gerar_folego(row):
-    """Gera um texto amigável resumindo a saúde do estoque."""
     aut = row["Autonomia"]
     lt = row["Lead_Time"]
     giro = row["Giro_Diario"]
@@ -233,7 +258,6 @@ def gerar_folego(row):
         if aut > 365:
             return f"Parado há mais de 1 ano ({aut:.0f} d de estoque)"
         return f"Excesso — {aut:.0f} d de estoque parado"
-    # OK
     folga = aut - lt
     if folga > 30:
         return f"Confortável — {aut:.0f} d de autonomia (folga de {folga:.0f} d)"
@@ -304,8 +328,6 @@ def montar_painel(df_est, df_vend, dias):
         return "✅ OK"
 
     df["Status"] = df.apply(status, axis=1)
-
-    # Fôlego depende de Status e Autonomia, calcula agora
     df["Fôlego"] = df.apply(gerar_folego, axis=1)
 
     # Curva ABC
@@ -358,7 +380,7 @@ except FileNotFoundError as e:
 df = montar_painel(df_est, df_vend, dias)
 
 st.caption(
-    f"📅 Período: {dias} dias • 🗂️ {len(df)} itens • "
+    f"📅 Período de análise: {dias} dias • 🗂️ {len(df)} itens • "
     f"🚫 Códigos '-M' ocultados • "
     f"🔄 Atualizado em {datetime.now().strftime('%d/%m/%Y %H:%M')}"
 )
@@ -404,12 +426,13 @@ k6.markdown(f'<div class="kpi warn"><h4>📉 Capital Parado</h4><p>R$ {saturado[
 st.markdown("---")
 
 # ---------- ABAS ----------
-t1, t2, t3, t4, t5, t6 = st.tabs([
+t1, t2, t3, t4, t5, t6, t7 = st.tabs([
     "📊 Visão Geral",
     "🔴 Compras",
     "⚠️ Saturado",
     "📈 Análise por Grupo",
     "🔍 Consulta",
+    "📖 Legenda & Lógica",
     "⚙️ Configuração",
 ])
 
@@ -418,16 +441,8 @@ with t1:
     c1, c2 = st.columns(2)
     with c1:
         fig = px.pie(df, names="Status", hole=0.45,
-                     title="Distribuição do Status",
-                     color="Status",
-                     color_discrete_map={
-                         "🔴 URGENTE": "#e53935",
-                         "🚨 COMPRAR": "#fb8c00",
-                         "⚠️ SATURADO": "#fdd835",
-                         "✅ OK": "#43a047",
-                         "⚪ Parado": "#9e9e9e",
-                         "⚪ Sem Movimento": "#bdbdbd",
-                     })
+                     title="Distribuição do Status Operacional",
+                     color="Status", color_discrete_map=STATUS_CORES)
         fig.update_traces(textinfo="label+percent")
         st.plotly_chart(fig, use_container_width=True)
 
@@ -436,9 +451,9 @@ with t1:
             "Valor_Imobilizado", ascending=False).head(10).copy()
         top["Label"] = top["Codigo"].str.slice(0, 20) + "  •  " + top["Produto"].str.slice(0, 32)
         fig = px.bar(top, x="Valor_Imobilizado", y="Label", orientation="h",
-                     title="Top 10 Capital Imobilizado (R$)",
+                     title="Top 10 — Maior Capital Imobilizado (R$)",
                      color="Grupo_Label",
-                     color_discrete_map={c["label"]: c["cor"] for c in GRUPOS_CONFIG.values()})
+                     color_discrete_map={c["label"]: c["cor"] for c in GRUPOS_CONFIG.values()} | {"Outros": "#616161"})
         fig.update_layout(yaxis={"categoryorder": "total ascending"}, showlegend=False)
         fig.update_traces(hovertemplate="<b>%{y}</b><br>R$ %{x:,.2f}<extra></extra>")
         st.plotly_chart(fig, use_container_width=True)
@@ -449,9 +464,10 @@ with t1:
             "Giro_Diario", ascending=False).head(10).copy()
         top_giro["Label"] = top_giro["Codigo"].str.slice(0, 20) + "  •  " + top_giro["Produto"].str.slice(0, 32)
         fig = px.bar(top_giro, x="Giro_Diario", y="Label", orientation="h",
-                     title="Top 10 Giro Diário (unid./dia)",
-                     color_discrete_sequence=["#1e88e5"])
-        fig.update_layout(yaxis={"categoryorder": "total ascending"})
+                     title="Top 10 — Maior Giro Diário (un./dia)",
+                     color="Grupo_Label",
+                     color_discrete_map={c["label"]: c["cor"] for c in GRUPOS_CONFIG.values()} | {"Outros": "#616161"})
+        fig.update_layout(yaxis={"categoryorder": "total ascending"}, showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
 
     with c4:
@@ -461,6 +477,91 @@ with t1:
                      title="Distribuição Curva ABC",
                      color="Curva",
                      color_discrete_sequence=px.colors.qualitative.Set2, text="Itens")
+        st.plotly_chart(fig, use_container_width=True)
+
+    # ---- NOVOS GRÁFICOS ----
+    st.markdown("### 🗺️ Capital Imobilizado por Grupo e Status")
+    df_tree = df[df["Valor_Imobilizado"] > 0]
+    if len(df_tree):
+        fig = px.treemap(
+            df_tree, path=["Grupo_Label", "Status"], values="Valor_Imobilizado",
+            color="Status", color_discrete_map=STATUS_CORES,
+        )
+        fig.update_traces(
+            textinfo="label+value+percent parent",
+            hovertemplate="<b>%{label}</b><br>R$ %{value:,.2f}<br>%{percentParent:.1%} do grupo<extra></extra>",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("### 📉 Pareto da Curva ABC")
+    top_par = df[df["Vendido"] > 0].head(30).copy()
+    if len(top_par):
+        top_par["Acum_%"] = (top_par["Vendido"].cumsum() / top_par["Vendido"].sum() * 100).round(1)
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=top_par["Codigo"], y=top_par["Vendido"],
+            name="Faturamento", marker_color="#1e88e5",
+            hovertemplate="<b>%{x}</b><br>R$ %{y:,.0f}<extra></extra>",
+        ))
+        fig.add_trace(go.Scatter(
+            x=top_par["Codigo"], y=top_par["Acum_%"],
+            name="Acumulado %", yaxis="y2",
+            line=dict(color="#e53935", width=3), mode="lines+markers",
+        ))
+        fig.update_layout(
+            title="Pareto — Top 30 SKUs por Faturamento",
+            yaxis=dict(title="Faturamento (R$)"),
+            yaxis2=dict(title="Acumulado %", overlaying="y", side="right",
+                        range=[0, 105], showgrid=False),
+            xaxis=dict(tickangle=-45),
+            legend=dict(orientation="h", y=1.1),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("### 🎯 Mapa de Risco — Giro × Autonomia")
+    st.caption("Itens no canto inferior esquerdo (baixa autonomia com giro alto) são críticos.")
+    df_sc = df[(df["Giro_Diario"] > 0) & (df["Autonomia"].notna())].copy()
+    if len(df_sc):
+        df_sc["Tam"] = df_sc["Valor_Imobilizado"].clip(lower=1)
+        fig = px.scatter(
+            df_sc, x="Giro_Diario", y="Autonomia",
+            color="Status", color_discrete_map=STATUS_CORES,
+            size="Tam", hover_data=["Codigo", "Produto", "Lead_Time"],
+            title="Giro Diário × Autonomia (tamanho = capital em estoque)",
+        )
+        # Linha de referência do lead time por grupo — usa a moda
+        lt_medio = df_sc["Lead_Time"].median()
+        fig.add_hline(y=lt_medio, line_dash="dash", line_color="red",
+                      annotation_text=f"Lead time médio ({lt_medio:.0f} d)",
+                      annotation_position="right")
+        fig.update_layout(xaxis_title="Giro Diário (un./dia)",
+                          yaxis_title="Autonomia (dias)")
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("### ⚖️ Autonomia × Lead Time — Top 15 críticos")
+    st.caption("Compara quantos dias o estoque dura com quantos dias o fornecedor leva. "
+               "Barras vermelhas = risco de ruptura.")
+    df_crit = df[(df["Giro_Diario"] > 0) & df["Autonomia"].notna()].copy()
+    df_crit["Risco"] = (df_crit["Lead_Time"] - df_crit["Autonomia"]).round(1)
+    df_crit = df_crit.sort_values("Risco", ascending=False).head(15)
+    if len(df_crit):
+        df_crit["Label"] = df_crit["Codigo"].str.slice(0, 18)
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=df_crit["Label"], y=df_crit["Autonomia"],
+            name="Autonomia atual (d)", marker_color="#43a047",
+        ))
+        fig.add_trace(go.Bar(
+            x=df_crit["Label"], y=df_crit["Lead_Time"],
+            name="Lead time fornecedor (d)", marker_color="#e53935",
+        ))
+        fig.update_layout(
+            barmode="group",
+            title="Top 15 — Autonomia × Lead Time",
+            xaxis_title="Código do produto", yaxis_title="Dias",
+            legend=dict(orientation="h", y=1.1),
+            xaxis_tickangle=-45,
+        )
         st.plotly_chart(fig, use_container_width=True)
 
 # ============ ABA 2 — COMPRAS ============
@@ -601,8 +702,159 @@ with t5:
     else:
         st.warning("Nenhum item corresponde aos filtros.")
 
-# ============ ABA 6 — CONFIGURAÇÃO ============
+# ============ ABA 6 — LEGENDA & LÓGICA ============
 with t6:
+    st.subheader("📖 Legenda & Lógica do Painel")
+    st.caption("Explicação em linguagem de negócio de cada indicador, status e regra usada.")
+
+    st.markdown("### 🚦 O que significa cada Status")
+
+    st.markdown("""
+    <div class="status-card s-urgente">
+      <h4>🔴 URGENTE — Abaixo do Estoque Mínimo</h4>
+      <p>A quantidade disponível é <b>menor ou igual ao Estoque Mínimo</b>. 
+      Isso significa que se um pedido grande entrar hoje, você pode não conseguir atender. 
+      É o estado mais crítico — deve ser resolvido imediatamente.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="status-card s-comprar">
+      <h4>🚨 COMPRAR — Atingiu o Ponto de Pedido</h4>
+      <p>A quantidade está acima do Mínimo, mas <b>já alcançou o Ponto de Pedido</b>. 
+      É o gatilho ideal para disparar a compra: se você comprar agora, o material chega 
+      antes do estoque acabar (considerando o Lead Time do fornecedor).</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="status-card s-saturado">
+      <h4>⚠️ SATURADO — Acima do Estoque Máximo</h4>
+      <p>Você tem <b>mais do que o necessário</b> para cobrir o consumo previsto. 
+      Isso é dinheiro parado em prateleira. Itens saturados raramente precisam de compra 
+      e devem ser monitorados para não virarem obsoletos.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="status-card s-ok">
+      <h4>✅ OK — Estoque Balanceado</h4>
+      <p>Quantidade está entre o Ponto de Pedido e o Estoque Máximo. 
+      É a <b>zona ideal</b>: nem risco de ruptura, nem capital parado em excesso.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="status-card s-parado">
+      <h4>⚪ PARADO — Tem estoque, mas não vendeu no período</h4>
+      <p>Existe quantidade em estoque, mas <b>nenhuma venda foi registrada</b> no período analisado. 
+      Não gera alerta de compra (não há consumo a repor), mas merece atenção: 
+      é capital imobilizado que pode estar obsoleto.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="status-card s-semmov">
+      <h4>⚪ SEM MOVIMENTO — Zerado e sem vendas</h4>
+      <p>Estoque zerado e nenhuma venda no período. O item está fora da operação — 
+      normalmente é item descontinuado, sazonal ou cadastro inativo.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.markdown("### 📊 Como funciona a Curva ABC")
+
+    st.markdown("""
+    A Curva ABC classifica os SKUs por **importância no faturamento** durante o período analisado.
+    A ideia é aplicar a **Lei de Pareto** (80/20) ao estoque: a minoria dos itens gera a maioria do resultado.
+    """)
+
+    st.markdown("""
+    <div class="formula-box">
+    <b>Regra de classificação:</b><br>
+    Ordena todos os SKUs por faturamento decrescente. Calcula o % acumulado.<br><br>
+    🅰️ <b>Curva A (Alta)</b> — SKUs que, juntos, somam os <b>primeiros 80%</b> do faturamento.<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;Poucos itens, mas são <b>o coração do negócio</b>. Nunca podem faltar.<br><br>
+    🅱️ <b>Curva B (Média)</b> — Itens que vão dos <b>80% até 95%</b> do faturamento.<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;Importância intermediária. Compra programada.<br><br>
+    🅲 <b>Curva C (Baixa)</b> — Itens que vão dos <b>95% até 100%</b>.<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;Vendem pouco, mas ainda têm giro. Compra pontual.<br><br>
+    🅳 <b>Curva D (Sem Giro)</b> — Itens que <b>não venderam nada</b> no período.<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;Ou estão descontinuados, ou são estoque morto.
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.info(
+        "💡 **Como usar na prática:** a política de estoque muda por curva. "
+        "Itens Curva A merecem estoque de segurança maior e monitoramento semanal. "
+        "Itens Curva C podem trabalhar com estoque enxuto (compra sob demanda). "
+        "Itens Curva D devem ser revisados para venda, descarte ou descontinuação."
+    )
+
+    st.markdown("---")
+    st.markdown("### 📐 Fórmulas usadas nos cálculos")
+
+    st.markdown("""
+    <div class="formula-box">
+    <b>Giro Diário</b> = Vendas do período ÷ Dias do período<br>
+    <i>Quanto o item vende por dia, em média.</i>
+    </div>
+
+    <div class="formula-box">
+    <b>Estoque de Segurança</b> = Giro Diário × Dias de Segurança (por grupo)<br>
+    <i>Proteção contra atrasos de fornecedor e picos inesperados de venda.</i>
+    </div>
+
+    <div class="formula-box">
+    <b>Estoque Mínimo</b> = Estoque de Segurança<br>
+    <i>Quantidade mínima que nunca deveria faltar.</i>
+    </div>
+
+    <div class="formula-box">
+    <b>Ponto de Pedido</b> = (Giro Diário × Lead Time) + Estoque de Segurança<br>
+    <i>Quando o estoque chega aqui, é hora de comprar — o material chega antes de acabar.</i>
+    </div>
+
+    <div class="formula-box">
+    <b>Estoque Máximo</b> = Ponto de Pedido + (Giro Diário × Dias de Cobertura)<br>
+    <i>Limite superior. Acima disso, é estoque em excesso.</i>
+    </div>
+
+    <div class="formula-box">
+    <b>Quantidade a Comprar</b> = Estoque Máximo − Estoque Atual<br>
+    <i>Só é calculada quando o estoque atual está ≤ Ponto de Pedido.</i>
+    </div>
+
+    <div class="formula-box">
+    <b>Autonomia</b> = Estoque Disponível ÷ Giro Diário<br>
+    <i>Quantos dias o estoque atual dura no ritmo de venda.</i>
+    </div>
+
+    <div class="formula-box">
+    <b>Fôlego</b> = Comparação entre Autonomia e Lead Time do fornecedor<br>
+    <i>Traduz em texto se o estoque vai acabar antes ou depois do fornecedor entregar.</i>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.markdown("### 🕒 Lead Time por Grupo de Produto")
+
+    conf = pd.DataFrame([
+        {"Grupo": c["label"], "Lead Time (dias)": c["lead_time"],
+         "Estoque Segurança (dias)": c["dias_seguranca"],
+         "Dias Cobertura (após PP)": c["dias_cobertura"]}
+        for c in GRUPOS_CONFIG.values()
+    ])
+    st.dataframe(conf, use_container_width=True, hide_index=True)
+
+    st.info(
+        "**Lead Time** é o tempo que o fornecedor leva para entregar o produto desde o pedido. "
+        "**Dias de Segurança** é a margem extra de proteção. "
+        "**Dias de Cobertura** é quanto de giro adicional entra no Estoque Máximo depois do Ponto de Pedido."
+    )
+
+# ============ ABA 7 — CONFIGURAÇÃO ============
+with t7:
     st.subheader("⚙️ Parâmetros de Cálculo por Grupo")
     st.caption("Estes são os valores usados para calcular Mínimo, Ponto de Pedido e Máximo.")
 
@@ -621,7 +873,7 @@ with t6:
     - **Estoque Mínimo** = Estoque de Segurança
     - **Ponto de Pedido** = (Giro Diário × Lead Time) + Estoque de Segurança
     - **Estoque Máximo** = Ponto de Pedido + (Giro Diário × Dias de Cobertura)
-    - **Fôlego** = quantos dias o estoque dura no ritmo atual, comparado ao lead time
+    - **Fôlego** = comparação entre Autonomia e Lead Time, em texto
     - **Qtd a Comprar** = Estoque Máximo − Qtd Disponível (só quando ≤ Ponto de Pedido)
     """)
 
